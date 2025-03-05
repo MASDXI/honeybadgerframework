@@ -1212,6 +1212,8 @@ contract HoneyBadgerBaseV1 is IHoneyBadgerBaseV1
      * the packed data slot for a put operation within a gas-free 
      * view function.  This data is then passed ot stage2_put for 
      * a minimum-cost operation.
+     * 
+     * Note: Not currently functional, needs to be updated to the new spec.
      */
     function stage1_put(
         uint256 data,
@@ -1313,6 +1315,10 @@ contract HoneyBadgerBaseV1 is IHoneyBadgerBaseV1
             sstore(add(keccak256(0x0, 0x8), page), packValue)
         }
     }
+
+    /*------------------------------------------------------------------------------------------------
+                                            Internal
+    ------------------------------------------------------------------------------------------------*/
 
     function _get_root_slot(uint256 storageSpace)
     internal view returns(uint256 slot)
