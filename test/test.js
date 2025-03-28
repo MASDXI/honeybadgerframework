@@ -8,6 +8,7 @@ let signers = [];
 let HoneyBadgerFactory;
 let HoneyBadgerBaseV1;
 
+//test suite is not completed.
 describe("HoneyBadgerBaseV1 Unit Tests", function()
 {
     let HoneyBadgerInstanceAddress;

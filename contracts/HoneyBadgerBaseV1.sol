@@ -44,11 +44,12 @@ contract HoneyBadgerBaseV1 is IHoneyBadgerBaseV1
     /// @dev Up to 5,000,000,000 entries per storage space.
     uint256 constant ENTRIES_LIM = 5_000_000_000;
 
+    
     /// @dev open record of current permission holders.
     address[] public permissionHolders;
 
     /// @dev internal permission bitmaps for each permission holder.  [32...256: 0/1 flags for PermissionLevel enum][bit 1: isContract flag]
-    mapping(address => uint256) permissions;
+    mapping(address => uint256) permissions;//optimization: refactor to single-hash slot derivation (LOW impact)
 
     /// @dev address indices mapped to entry indices for address-indexing.
     mapping(uint256 => mapping(address => uint256)) addressIndices;
@@ -66,12 +67,11 @@ contract HoneyBadgerBaseV1 is IHoneyBadgerBaseV1
 
     constructor(address _owner) 
     {
-        uint8[] memory ownerPerms = new uint8[](5);
+        uint8[] memory ownerPerms = new uint8[](3);
 
-        ownerPerms[0] = uint8(PermissionFlags.View);
-        ownerPerms[1] = uint8(PermissionFlags.Modify);
-        ownerPerms[3] = uint8(PermissionFlags.PermissionManagement);
-        ownerPerms[4] = uint8(PermissionFlags.StorageSpace);
+        ownerPerms[0] = uint8(PermissionFlags.Modify);
+        ownerPerms[1] = uint8(PermissionFlags.PermissionManagement);
+        ownerPerms[2] = uint8(PermissionFlags.StorageSpace);
         
         uint256 permData = _update_permission_data(ownerPerms, msg.sender, false);
         permissions[msg.sender] = permData;
@@ -113,39 +113,39 @@ contract HoneyBadgerBaseV1 is IHoneyBadgerBaseV1
 
     /** 
 
-        @notice Updates user's permissions.  If no permissions exist, it will 
+        @notice Updates recipient's permissions.  If no permissions exist, it will 
         populate a new entry in the permissionHolders array.
         @dev Tries to fill an empty existing slot in permissionHolders before pushing.
     */
-    function update_permissions(address user, uint8[] memory flags, bool remove) external 
+    function update_permissions(address recipient, uint8[] memory flags, bool remove) external 
     {
         _access_control(msg.sender, PermissionFlags.PermissionManagement, false);
 
         uint256 i;
         uint256 l = permissionHolders.length;
         bool replace = false;
-        bool already_included = (permissions[user] != 0);
+        bool already_included = (permissions[recipient] != 0);
 
         if (already_included == false) 
         {
             for (i; i < l; i++) 
             {
                 if (permissionHolders[i] == address(0)) {
-                    permissionHolders[i] = user;
+                    permissionHolders[i] = recipient;
                     replace = true;
                 }
             }
             if (!replace) {
-                permissionHolders.push(user);
+                permissionHolders.push(recipient);
             }
         }
 
-        uint256 updatedPerms = _update_permission_data(flags, user, remove);
+        uint256 updatedPerms = _update_permission_data(flags, recipient, remove);
 
         //update permission level
-        permissions[user] = updatedPerms;
+        permissions[recipient] = updatedPerms;
 
-        emit PermissionsChanged(user);
+        emit PermissionsChanged(recipient);
     }
 
     /**
@@ -276,7 +276,6 @@ contract HoneyBadgerBaseV1 is IHoneyBadgerBaseV1
         assembly 
         {   
             //store 0x[members(64)][entries(64)][stringIndex(64)][safeIndex (32)][specialAccess(32)]
-
             let storageSpaceMetadata := or(
                 shl(32, safeIndex),
                 or(
@@ -295,7 +294,7 @@ contract HoneyBadgerBaseV1 is IHoneyBadgerBaseV1
         }
 
         emit StorageSpaceCreated(storageSpaces - 1);
-        return storageSpaces;
+        return storageSpaces - 1;
     }
 
     /** 
@@ -435,17 +434,23 @@ contract HoneyBadgerBaseV1 is IHoneyBadgerBaseV1
         https://github.com/wisecameron/ERCs/blob/wisecameron/erc-cds/ERCS/erc-7844.md
     */
     function push(uint256 amount, uint256 storageSpace) public 
+    returns(uint256)
     {
         _access_control(msg.sender, PermissionFlags.StorageSpace, false);
         require(storageSpace < storageSpaces, "invalid storage space");
         uint256 ROOT_SLOT = _get_root_slot(storageSpace);
+
+        uint256 earliestNewEntry;
+        uint256 adjustedEntries;
 
         assembly 
         {
             //update the bits on the second level
             let fullSlot := sload(ROOT_SLOT)
 
-            let adjustedEntries := add(and(shr(128, fullSlot), 0xFFFFFFFFFFFFFFFF), amount)
+            earliestNewEntry := and(shr(128, fullSlot), 0xFFFFFFFFFFFFFFFF)
+
+            adjustedEntries := add(earliestNewEntry, amount)
 
             if gt(adjustedEntries, ENTRIES_LIM)
             {
@@ -464,6 +469,8 @@ contract HoneyBadgerBaseV1 is IHoneyBadgerBaseV1
         }
 
         emit Push(amount, storageSpace);
+        
+        return earliestNewEntry;
     }
 
     /*------------------------------------------------------------------------------------------------
@@ -833,7 +840,6 @@ contract HoneyBadgerBaseV1 is IHoneyBadgerBaseV1
     ) public view returns (uint256) 
     {
         require(entryIndex > 0, "invalid entry index");
-        _access_control(msg.sender, PermissionFlags.View, false);
         require(storageSpace < storageSpaces);
 
         uint256 ROOT_SLOT = _get_root_slot(storageSpace);
@@ -886,7 +892,6 @@ contract HoneyBadgerBaseV1 is IHoneyBadgerBaseV1
         require(entryIndex > 0, "invalid entry index");
         require(storageSpace < storageSpaces, "Invalid storage space!");
 
-        _access_control(msg.sender, PermissionFlags.View, false);
         uint256 ROOT_SLOT = _get_root_slot(storageSpace);
         _validate_memberIndex_and_entryIndex(ROOT_SLOT, memberIndex, entryIndex);
         uint256 slot = _derive_user_slot(entryIndex, storageSpace, 0, false,  ROOT_SLOT, specialAccess);
@@ -918,7 +923,6 @@ contract HoneyBadgerBaseV1 is IHoneyBadgerBaseV1
     ) external view returns (string memory returnValue)
     {
         require(entryIndex > 0, "invalid entry index");
-        _access_control(msg.sender, PermissionFlags.View, false);
         require(storageSpace < storageSpaces);
 
         uint256 ROOT_SLOT = _get_root_slot(storageSpace);
@@ -1005,8 +1009,7 @@ contract HoneyBadgerBaseV1 is IHoneyBadgerBaseV1
     {
         require(entryIndex > 0, "invalid entry index");
         require(storageSpace < storageSpaces, "Invalid storage space!");
-        _access_control(msg.sender, PermissionFlags.View, false);
-        
+
         uint256 ROOT_SLOT = _get_root_slot(storageSpace);
         uint256 slot = _derive_user_slot(entryIndex, storageSpace, 0, false, ROOT_SLOT,  specialAccess);
 
@@ -1099,7 +1102,6 @@ contract HoneyBadgerBaseV1 is IHoneyBadgerBaseV1
     ) external view returns (uint256 size) 
     {
         require(entryIndex > 0, "invalid entry index");
-        _access_control(msg.sender, PermissionFlags.View, false);
         
         require(storageSpace < storageSpaces);
         uint256 ROOT_SLOT = _get_root_slot(storageSpace);
@@ -1212,90 +1214,70 @@ contract HoneyBadgerBaseV1 is IHoneyBadgerBaseV1
      * the packed data slot for a put operation within a gas-free 
      * view function.  This data is then passed ot stage2_put for 
      * a minimum-cost operation.
-     * 
-     * Note: Not currently functional, needs to be updated to the new spec.
      */
     function stage1_put(
         uint256 data,
         uint256 memberIndex,
         uint256 entryIndex,
-        uint256 storageSpace
+        uint256 storageSpace,
+        bytes calldata specialAccess
     ) external view returns (uint256, uint256, uint256) 
     {
-        require(entryIndex > 0, "invalid entry index");
+
+        uint256 ROOT_SLOT = _get_root_slot(storageSpace);
+
+        require(entryIndex > 0 && storageSpace < storageSpaces, 
+        "Failed to validate entry index or storage space");
+
         _access_control(msg.sender, PermissionFlags.Modify, false);
-        require(storageSpace < storageSpaces);
-
-        assembly {
-            let member128entry128 := sload(add(1000, mul(storageSpace, 1000)))
-
-            if or(
-                gt(
-                    memberIndex,
-                    and(member128entry128, 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF)
-                ),
-                gt(entryIndex, shr(128, member128entry128))
-            ) {
-                mstore(0x0, 0x1)
-                revert(0x0, 0x20)
-            }
-        }
+        _validate_memberIndex_and_entryIndex(ROOT_SLOT, memberIndex, entryIndex);
+        uint256 slot = _derive_user_slot(entryIndex, storageSpace, 0, false, ROOT_SLOT, specialAccess);
 
         //verify type and size
         uint256 packValue;
+        uint256 size;
+        uint256 page;
+        uint256 bitCount;
 
-        assembly {
-            packValue := sload(
-                add(add(1001, mul(storageSpace, 1000)), memberIndex)
-            )
+        assembly 
+        {
+            packValue := sload(add(ROOT_SLOT, add(1, memberIndex)))
+            size := and(shr(64, packValue), 0xFFFFFFFFFFFFFFFF)
+            bitCount := shr(128, packValue)
         }
 
-        uint256 valType = packValue & 0xFFFFFFFFFFFFFFFF;
-        uint256 size = (packValue >> 64) & 0xFFFFFFFFFFFFFFFF;
-        uint256 bitCount = (packValue >> 128);
-        uint256 slotHash;
-        _validate_data(valType, size, data);
+        _validate_data(
+            packValue & 0xFFFFFFFFFFFFFFFF, /* valType */
+            size, 
+            data
+        );
 
         //prep data to match any type
         assembly {
+            page := div(bitCount, 256)
 
-            /*get the packed value from the storage system 
-            that contains the user's data field*/
-
-            //data storage starts at slot 10,000
-            slotHash := shl(
-                184,
-                add(entryIndex, mul(5000000000, storageSpace))
-            )
-
-            mstore(0x0, slotHash)
-
-            //add up to the data page -- storage[userIndex][page]
-            packValue := sload(add(keccak256(0x0, 0x8), div(bitCount, 256)))
+            //add up to the data page -- hash(index + storageSpace * ENTRIES_LIM) + page
+            packValue := sload(add(slot, page))
 
             /* zero out the area that will be replaced */
 
             //start index is bitCount - (256 * (bitCount / 256))
-            //let a := div(bitCount, 256)
-            //a := mul(a, 256)
-            //a := sub(bitCount, a)
+            //let a := div(bitCount, 256) -> 1042 -> 4.0703125 -> 4
+            //a := mul(a, 256) -> 4 * 256 = 1024
+            //a := sub(bitCount, a) -> 1042 - 1024 = 18
+            //so, our slot is filled until bit 18
+            let precedingBits := mod(bitCount, 256)
 
-            let precedingBits := sub(bitCount, mul(div(bitCount, 256), 256))
-
-            //Create a mapping to zero out our target 
-            let mask2 := not(shl(precedingBits, sub(shl(size, 1), 1)))
-
-            //shift data into  correct position
-            if gt(precedingBits, 0) 
-            {
-                data := shl(precedingBits, data)
-            }
-
-            //place data into packValue
-            packValue := or(and(packValue, mask2), data)
+            //Clear the old value and insert our new data
+            packValue := or(
+                and(
+                    packValue, 
+                    not(shl(precedingBits, sub(shl(size, 1), 1)))
+                ), 
+                shl(precedingBits, data)
+            )
         }
-
-        return (slotHash, bitCount / 256, packValue);
+        return (slot, page, packValue);
     }
 
     /**
@@ -1315,10 +1297,6 @@ contract HoneyBadgerBaseV1 is IHoneyBadgerBaseV1
             sstore(add(keccak256(0x0, 0x8), page), packValue)
         }
     }
-
-    /*------------------------------------------------------------------------------------------------
-                                            Internal
-    ------------------------------------------------------------------------------------------------*/
 
     function _get_root_slot(uint256 storageSpace)
     internal view returns(uint256 slot)
@@ -1347,12 +1325,13 @@ contract HoneyBadgerBaseV1 is IHoneyBadgerBaseV1
         {
             let fullSlot := sload(ROOT_SLOT)
 
-            //invalid entry or member
+            
             if or(
                 iszero(gt(shr(192, fullSlot) /*totalMembers*/, memberIndex)),
                 iszero(gt(and(shr(128, fullSlot), 0xFFFFFFFFFFFFFFFF) /*totalEntries*/, entryIndex))
             )
             {
+                //invalid entry or member
                 mstore(0x0, 0x496e76616c696420656e747279206f72206d656d626572)
                 revert(0x0, 0x20)
             }
@@ -1501,12 +1480,14 @@ contract HoneyBadgerBaseV1 is IHoneyBadgerBaseV1
     function address_indexed(
         address target,
         uint256 storageSpace
-    ) external view returns(uint256)
+    ) external view returns(uint256 userIndex)
     {
-        uint256 userIndex = addressIndices[storageSpace][target];
-
-        return userIndex;
+        userIndex = addressIndices[storageSpace][target];
     }
+
+    /*------------------------------------------------------------------------------------------------
+                                            Internal
+    ------------------------------------------------------------------------------------------------*/
 
     function _validate_permission_changes(
         address target,

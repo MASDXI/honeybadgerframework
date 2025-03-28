@@ -3,22 +3,6 @@ pragma solidity ^0.8.0;
 
 interface IHoneyBadgerBaseV1
 {
-    enum CallCodes
-    {
-        None, //0
-        InitCreate, //1
-        InsertNewMember, //2
-        Push, //3
-        Put, //4
-        Put256, //5
-        PutString, //6
-        PutBatch, //7
-        Get, //8
-        Get256, //9
-        GetString, //10
-        GetBatch //11
-    }
-
     struct MemberData
     {
         uint256 valType;
@@ -36,10 +20,9 @@ interface IHoneyBadgerBaseV1
     enum PermissionFlags 
     {
         None, //0
-        View, //1
-        Modify, //2
-        PermissionManagement, //3
-        StorageSpace //4
+        Modify, //1
+        PermissionManagement, //2
+        StorageSpace //3
     }
 
     struct UserSlotArgs
@@ -54,7 +37,7 @@ interface IHoneyBadgerBaseV1
 
     function strip_permissions(address user) external returns (bool);
 
-    function update_permissions(address user, uint8[] memory flags, bool remove) external;
+    function update_permissions(address recipient, uint8[] memory flags, bool remove) external;
 
     function view_permissions(address user) external view returns (uint256);
 
@@ -70,7 +53,8 @@ interface IHoneyBadgerBaseV1
         uint256 storageSpace
     ) external; 
 
-    function push(uint256 amount, uint256 storageSpace) external;
+    function push(uint256 amount, uint256 storageSpace) 
+    external returns(uint256);
 
     function put(
         uint256 data,
@@ -147,4 +131,10 @@ interface IHoneyBadgerBaseV1
         address target,
         uint256 storageSpace
     ) external view returns(uint256);
+
+    function add_address_index(
+        address addressIndex, 
+        uint256 storageSpace,
+        uint256 entryIndex)
+    external;
 }
