@@ -1,6 +1,8 @@
 
 # HoneyBadger Framework
 
+![HoneyBadger Logo](logoTPB.png)
+
 HoneyBadger is an extension of ERC-7844, offering a comprehensive plug-and-play data and permission management solution for Solidity smart contract systems in a single easy-to-use package.  
 
 The core concept behind HoneyBadger is to standardize cutting-edge supporting infrastructure.  The model cohesively combines best practices for interoperability, dependency management, upgradeability, and storage management into an extendible format with near-universal applicability.   
